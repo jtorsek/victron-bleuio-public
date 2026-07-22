@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Real secrets -- copy the .example files to these names and fill in your
+# own device's key/PIN. Never commit the real ones.
+keys.json
+inverter.json
+
+# PlatformIO build artifacts
+lilygo_victron_display/.pio/
+
+# Claude Code local settings
+.claude/
