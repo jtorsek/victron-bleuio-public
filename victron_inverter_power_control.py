@@ -43,6 +43,20 @@ Confirmed registers:
     0x03eb  AC output frequency (1 byte, boolean): 0x00=60Hz, 0x01=50Hz
     0xbaeb  Dynamic cutoff voltage enabled (1 byte, boolean): 0x01=on, 0x00=off
     0x0010  Battery capacity, Ah (2 bytes, unscaled)
+    0xb2eb  Dynamic cutoff voltage factor at 0.005A, V (2 bytes, raw = round(volts * 1000)).
+            Valid range 0.00-100.00V in 0.01V steps.
+    0xb3eb  Dynamic cutoff voltage factor at 0.250A, V (2 bytes, raw = round(volts * 1000)).
+            Valid range 0.00-100.00V in 0.01V steps.
+    0xb4eb  Dynamic cutoff voltage factor at 0.700A, V (2 bytes, raw = round(volts * 1000)).
+            Valid range 0.00-100.00V in 0.01V steps.
+    0xb5eb  Dynamic cutoff voltage factor at 2.000A, V (2 bytes, raw = round(volts * 1000)).
+            Valid range 0.00-100.00V in 0.01V steps.
+
+"Battery type" (Gel/AGM, OPzS/OPzV, Smart Lithium, Custom) is not its own
+register -- VictronConnect just writes the four dynamic-cutoff-curve
+registers above with fixed values per preset, and shows "Custom" whenever
+the curve doesn't match a known preset. --set-battery-type sends the
+matching bundle of four writes for you; see BATTERY_TYPE_PRESETS.
 
 The voltage/frequency registers above are safety-relevant: they affect what's
 plugged into the inverter's output right now, or when the inverter cuts off
@@ -113,6 +127,11 @@ Usage
     python3 victron_inverter_power_control.py --config inverter.json --set-ac-frequency 50
     python3 victron_inverter_power_control.py --config inverter.json --set-dynamic-cutoff on
     python3 victron_inverter_power_control.py --config inverter.json --set-battery-capacity 166
+    python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-0005 12.01
+    python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-0250 11.26
+    python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-0700 10.56
+    python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-2000 10.01
+    python3 victron_inverter_power_control.py --config inverter.json --set-battery-type gel_agm
 
     # or store address/PIN in a small JSON file and reuse it:
     python3 victron_inverter_power_control.py --config inverter.json --set on
@@ -222,6 +241,42 @@ DYNAMIC_CUTOFF_VALUES = {"on": 0x01, "off": 0x00}
 
 # Battery capacity register: confirmed via live packet capture.
 BATTERY_CAPACITY_REGISTER = 0x0010  # Ah, 2 bytes, unscaled
+
+# Dynamic cutoff voltage curve factors: also confirmed via live packet
+# capture. All are 2 bytes, raw value = round(volts * 1000).
+# Valid range 0.00-100.00V in 0.01V steps (per VictronConnect's own input
+# limits, confirmed by the user against the real app).
+DYN_CUTOFF_FACTOR_0005_REGISTER = 0xb2eb
+DYN_CUTOFF_FACTOR_0250_REGISTER = 0xb3eb
+DYN_CUTOFF_FACTOR_0700_REGISTER = 0xb4eb
+DYN_CUTOFF_FACTOR_2000_REGISTER = 0xb5eb
+DYN_CUTOFF_FACTOR_MIN = 0.00
+DYN_CUTOFF_FACTOR_MAX = 100.00
+
+# "Battery type" presets: each is just the bundle of dynamic-cutoff-curve
+# values VictronConnect sends when you pick that preset in the app -- there
+# is no separate battery-type register. Confirmed via live packet capture
+# (each preset selection was observed writing exactly these four values).
+BATTERY_TYPE_PRESETS = {
+    "gel_agm": [
+        (DYN_CUTOFF_FACTOR_0005_REGISTER, 12.000),
+        (DYN_CUTOFF_FACTOR_0250_REGISTER, 11.650),
+        (DYN_CUTOFF_FACTOR_0700_REGISTER, 11.400),
+        (DYN_CUTOFF_FACTOR_2000_REGISTER, 11.200),
+    ],
+    "opzs_opzv": [
+        (DYN_CUTOFF_FACTOR_0005_REGISTER, 12.000),
+        (DYN_CUTOFF_FACTOR_0250_REGISTER, 11.250),
+        (DYN_CUTOFF_FACTOR_0700_REGISTER, 10.550),
+        (DYN_CUTOFF_FACTOR_2000_REGISTER, 10.000),
+    ],
+    "smart_lithium": [
+        (DYN_CUTOFF_FACTOR_0005_REGISTER, 13.000),
+        (DYN_CUTOFF_FACTOR_0250_REGISTER, 12.500),
+        (DYN_CUTOFF_FACTOR_0700_REGISTER, 12.300),
+        (DYN_CUTOFF_FACTOR_2000_REGISTER, 12.000),
+    ],
+}
 
 SERVICE_LINE_RE = re.compile(r"^([0-9a-fA-F]{4})\s+----\s+([0-9a-fA-F-]+)\s*$")
 
@@ -340,6 +395,11 @@ def main():
     action.add_argument("--set-ac-frequency", type=int, choices=sorted(AC_FREQUENCY_VALUES), help="AC output frequency, in Hz (safety-relevant, see docstring)")
     action.add_argument("--set-dynamic-cutoff", choices=sorted(DYNAMIC_CUTOFF_VALUES), help="Dynamic cutoff voltage enabled, on or off")
     action.add_argument("--set-battery-capacity", type=int, metavar="AH", help="Battery capacity, in Ah (0-65535)")
+    action.add_argument("--set-dyn-cutoff-0005", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 0.005A, in volts, 0.00-100.00")
+    action.add_argument("--set-dyn-cutoff-0250", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 0.250A, in volts, 0.00-100.00")
+    action.add_argument("--set-dyn-cutoff-0700", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 0.700A, in volts, 0.00-100.00")
+    action.add_argument("--set-dyn-cutoff-2000", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 2.000A, in volts, 0.00-100.00")
+    action.add_argument("--set-battery-type", choices=sorted(BATTERY_TYPE_PRESETS), help="Battery type preset (sends the matching dynamic cutoff curve, see docstring)")
     parser.add_argument("--port", help="Serial port of the BleuIO dongle (default: auto-detect)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation prompt")
@@ -411,10 +471,38 @@ def main():
         elif args.set_dynamic_cutoff is not None:
             action_desc = f"set its Dynamic cutoff voltage enabled to '{args.set_dynamic_cutoff.upper()}'"
             command_hex = build_register_write(DYNAMIC_CUTOFF_REGISTER, DYNAMIC_CUTOFF_VALUES[args.set_dynamic_cutoff], 1)
-        else:
+        elif args.set_battery_capacity is not None:
             require_range(args.set_battery_capacity, 0, 0xFFFF, "--set-battery-capacity")
             action_desc = f"set its battery capacity to {args.set_battery_capacity} Ah"
             command_hex = build_register_write(BATTERY_CAPACITY_REGISTER, args.set_battery_capacity, 2)
+        else:
+            def dyn_cutoff_command(volts, register, name):
+                require_range(volts, DYN_CUTOFF_FACTOR_MIN, DYN_CUTOFF_FACTOR_MAX, name)
+                raw = round(volts * 1000)
+                return build_register_write(register, raw, 2)
+
+            if args.set_dyn_cutoff_0005 is not None:
+                action_desc = f"set its dynamic cutoff factor at 0.005A to {args.set_dyn_cutoff_0005} V"
+                command_hex = dyn_cutoff_command(args.set_dyn_cutoff_0005, DYN_CUTOFF_FACTOR_0005_REGISTER, "--set-dyn-cutoff-0005")
+            elif args.set_dyn_cutoff_0250 is not None:
+                action_desc = f"set its dynamic cutoff factor at 0.250A to {args.set_dyn_cutoff_0250} V"
+                command_hex = dyn_cutoff_command(args.set_dyn_cutoff_0250, DYN_CUTOFF_FACTOR_0250_REGISTER, "--set-dyn-cutoff-0250")
+            elif args.set_dyn_cutoff_0700 is not None:
+                action_desc = f"set its dynamic cutoff factor at 0.700A to {args.set_dyn_cutoff_0700} V"
+                command_hex = dyn_cutoff_command(args.set_dyn_cutoff_0700, DYN_CUTOFF_FACTOR_0700_REGISTER, "--set-dyn-cutoff-0700")
+            elif args.set_dyn_cutoff_2000 is not None:
+                action_desc = f"set its dynamic cutoff factor at 2.000A to {args.set_dyn_cutoff_2000} V"
+                command_hex = dyn_cutoff_command(args.set_dyn_cutoff_2000, DYN_CUTOFF_FACTOR_2000_REGISTER, "--set-dyn-cutoff-2000")
+            else:
+                # Battery "type" isn't its own register -- VictronConnect just
+                # bundles fixed dynamic-cutoff-curve values per preset and
+                # shows "Custom" whenever the curve doesn't match a preset.
+                # This sends all four registers for the chosen preset, one
+                # per (re)connection -- see BATTERY_TYPE_PRESETS and the note
+                # on multi-write connections in main().
+                preset = BATTERY_TYPE_PRESETS[args.set_battery_type]
+                action_desc = f"set its battery type to '{args.set_battery_type}' (dynamic cutoff curve preset)"
+                command_hex = [build_register_write(register, round(volts * 1000), 2) for register, volts in preset]
 
     print(f"About to connect to {mac} and {action_desc}.")
     print("This sends an unofficial, reverse-engineered command directly to your")
@@ -427,6 +515,24 @@ def main():
             print("Aborted.")
             return
 
+    commands = command_hex if isinstance(command_hex, list) else [command_hex]
+    if len(commands) == 1:
+        send_commands(args, mac, addr_type, pin, commands)
+    else:
+        # A batch of register writes sent within one connection was observed
+        # reliably disconnecting the inverter partway through (after exactly
+        # 3 successful writes, regardless of what -- if anything -- was sent
+        # between them). Reconnecting fresh for each write is slower but
+        # matches what's actually been verified to work reliably.
+        for i, hex_data in enumerate(commands):
+            print(f"--- write {i + 1}/{len(commands)} ---")
+            send_commands(args, mac, addr_type, pin, [hex_data])
+    print("Done.")
+
+
+def send_commands(args, mac: str, addr_type: int, pin: str, commands: list):
+    """Connect, pair, and send the given list of already-built command hex
+    strings to the command characteristic within a single connection."""
     client = BleuIOGattClient(port=args.port, baud=args.baud, verbose=args.verbose)
     print(f"Connected to BleuIO dongle on {client.port_name}")
 
@@ -458,10 +564,9 @@ def main():
         for uuid, hex_data in INIT_SEQUENCE:
             client.write_handle(uuid_to_handle[uuid], hex_data)
 
-        print(f"Sending command: {action_desc}")
-        client.write_handle(command_handle, command_hex)
+        for hex_data in commands:
+            client.write_handle(command_handle, hex_data)
         time.sleep(0.5)
-        print("Done.")
     finally:
         client.disconnect()
         client.close()
