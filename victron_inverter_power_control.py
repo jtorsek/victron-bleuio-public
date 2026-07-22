@@ -87,9 +87,17 @@ setting itself. It was NOT required in our own direct tests (the inverter
 applied 0x0722 immediately without it), so this script does not send it,
 but if a register write here doesn't seem to stick, that's worth trying.
 
-Other settings (battery capacity, relay mode, dynamic cutoff curve, etc.)
-have unknown register IDs -- guessing them is not safe; each new one needs
-its own verified packet capture before being added here.
+Other settings have unknown register IDs -- guessing them is not safe; each
+new one needs its own verified packet capture before being added here.
+
+"Relay mode" specifically is NOT investigated, and can't be with this
+approach: it refers to the inverter's physical remote on/off input (screw
+terminals), not an app-settable value. Live-testing it (open vs. closed
+circuit on that input) showed the inverter stop responding entirely rather
+than exposing any distinct state over BLE -- consistent with it being a
+hardware power switch -- but this has not been confirmed against
+VictronConnect itself, since the app has no control or display for it to
+compare against. Treat this as unverified, not resolved.
 
 This is unofficial, unsupported, and could put the device into an
 unexpected state. Use it on your own equipment, at your own risk, and only
