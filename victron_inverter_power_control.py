@@ -51,6 +51,23 @@ Confirmed registers:
             Valid range 0.00-100.00V in 0.01V steps.
     0xb5eb  Dynamic cutoff voltage factor at 2.000A, V (2 bytes, raw = round(volts * 1000)).
             Valid range 0.00-100.00V in 0.01V steps.
+    0xa301  Settings lock code (4 bytes, raw = the 8-digit code as a plain
+            integer, e.g. "72727272" -> 72727272). Confirmed via three live
+            captures, each setting a different 8-digit code.
+    0xa001  The same lock code, paired with a timestamp (8 bytes: the code as
+            a 4-byte LE uint32 in the low half, current Unix time -- seconds
+            since epoch -- as a 4-byte LE uint32 in the high half).
+            VictronConnect always writes this register first, then 0xa301,
+            whenever the lock code is set. The timestamp's exact purpose on
+            the device side is unclear, but across two live captures it
+            tracked real elapsed wall-clock time almost exactly, which rules
+            out a nonce or a checksum of the code.
+
+Unlocking (removing the code) writes only 0xa001 -- with the low 4 bytes set
+to the sentinel 0xFFFFFFFF instead of a real code, and the high 4 bytes the
+current Unix timestamp as usual. 0xa301 is left untouched. VictronConnect's
+own confirmation prompt (re-entering the existing code before unlocking) is
+checked locally in the app; the code you type is never part of this write.
 
 "Battery type" (Gel/AGM, OPzS/OPzV, Smart Lithium, Custom) is not its own
 register -- VictronConnect just writes the four dynamic-cutoff-curve
@@ -132,6 +149,8 @@ Usage
     python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-0700 10.56
     python3 victron_inverter_power_control.py --config inverter.json --set-dyn-cutoff-2000 10.01
     python3 victron_inverter_power_control.py --config inverter.json --set-battery-type gel_agm
+    python3 victron_inverter_power_control.py --config inverter.json --set-lock-code 12345678
+    python3 victron_inverter_power_control.py --config inverter.json --unlock-settings
 
     # or store address/PIN in a small JSON file and reuse it:
     python3 victron_inverter_power_control.py --config inverter.json --set on
@@ -278,6 +297,13 @@ BATTERY_TYPE_PRESETS = {
     ],
 }
 
+# Settings lock code registers: confirmed via three live packet captures,
+# each setting a different 8-digit code. VictronConnect writes 0xa001 (code +
+# timestamp) first, then 0xa301 (code alone) -- see the module docstring.
+LOCK_CODE_TIMESTAMPED_REGISTER = 0xa001  # 8 bytes: code (low 4B LE) + unix time (high 4B LE)
+LOCK_CODE_REGISTER = 0xa301              # 4 bytes: code alone
+UNLOCK_SENTINEL = 0xFFFFFFFF             # written to the low 4 bytes of 0xa001 to unlock
+
 SERVICE_LINE_RE = re.compile(r"^([0-9a-fA-F]{4})\s+----\s+([0-9a-fA-F-]+)\s*$")
 
 
@@ -400,6 +426,8 @@ def main():
     action.add_argument("--set-dyn-cutoff-0700", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 0.700A, in volts, 0.00-100.00")
     action.add_argument("--set-dyn-cutoff-2000", type=float, metavar="VOLTS", help="Dynamic cutoff voltage factor at 2.000A, in volts, 0.00-100.00")
     action.add_argument("--set-battery-type", choices=sorted(BATTERY_TYPE_PRESETS), help="Battery type preset (sends the matching dynamic cutoff curve, see docstring)")
+    action.add_argument("--set-lock-code", metavar="CODE", help="Settings lock code, exactly 8 digits (e.g. 12345678)")
+    action.add_argument("--unlock-settings", action="store_true", help="Remove the settings lock code")
     parser.add_argument("--port", help="Serial port of the BleuIO dongle (default: auto-detect)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation prompt")
@@ -493,6 +521,22 @@ def main():
             elif args.set_dyn_cutoff_2000 is not None:
                 action_desc = f"set its dynamic cutoff factor at 2.000A to {args.set_dyn_cutoff_2000} V"
                 command_hex = dyn_cutoff_command(args.set_dyn_cutoff_2000, DYN_CUTOFF_FACTOR_2000_REGISTER, "--set-dyn-cutoff-2000")
+            elif args.set_lock_code is not None:
+                if not re.fullmatch(r"\d{8}", args.set_lock_code):
+                    sys.exit("--set-lock-code must be exactly 8 digits")
+                code = int(args.set_lock_code)
+                timestamp = int(time.time())
+                action_desc = f"set its settings lock code to {args.set_lock_code}"
+                command_hex = [
+                    build_register_write(LOCK_CODE_TIMESTAMPED_REGISTER, code | (timestamp << 32), 8),
+                    build_register_write(LOCK_CODE_REGISTER, code, 4),
+                ]
+            elif args.unlock_settings:
+                timestamp = int(time.time())
+                action_desc = "remove its settings lock code"
+                command_hex = build_register_write(
+                    LOCK_CODE_TIMESTAMPED_REGISTER, UNLOCK_SENTINEL | (timestamp << 32), 8
+                )
             else:
                 # Battery "type" isn't its own register -- VictronConnect just
                 # bundles fixed dynamic-cutoff-curve values per preset and

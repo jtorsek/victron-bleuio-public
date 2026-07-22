@@ -8,6 +8,10 @@ lilygo_victron_display/.pio/
 # Claude Code local settings
 .claude/
 
+# Local tooling that embeds real secrets as find/replace patterns -- must
+# never be committed here or archived into the public repo.
+scripts/sync-to-public-repo.sh
+
 # Real secrets -- copy the .example files to these names and fill in your
 # own device's key/PIN. Never commit the real ones.
 keys.json
